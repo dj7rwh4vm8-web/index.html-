@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nics Terminal-Rechner</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#000;--g:#33ff66;--gd:#1f9f48;--gdd:#0d3d1c;--hi:#b6ffcb;--err:#ff6b6b;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+html{color-scheme:dark}
+body{background:var(--bg);color:var(--g);font-family:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;font-size:15px}
+.app{height:100%;display:flex;flex-direction:column;max-width:980px;margin:0 auto;padding:10px}
+.bar{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;border-bottom:1px solid var(--gdd);padding:4px 2px 10px}
+.bar .t{color:var(--gd);margin-right:auto}
+.bar button{background:none;border:1px solid var(--gdd);color:var(--g);font:inherit;padding:5px 10px;cursor:pointer}
+.bar button[aria-selected=true]{background:var(--g);color:#000;border-color:var(--g);font-weight:700}
+button:focus-visible,input:focus-visible{outline:2px solid var(--g);outline-offset:2px}
+.term{flex:1;min-height:0;display:grid;grid-template-columns:1fr 320px;gap:14px;padding-top:12px}
+.log{border:1px solid var(--gdd);padding:12px;overflow-y:auto;min-height:0;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.log .cmd{color:var(--hi);margin-top:10px}
+.log .st{color:var(--gd)}
+.log .res{color:var(--g);font-weight:700;text-shadow:0 0 8px rgba(51,255,102,.45)}
+.log .err{color:var(--err)}
+.log .live{color:var(--hi);margin-top:12px;border-top:1px dashed var(--gdd);padding-top:8px}
+.cur{display:inline-block;width:.6em;height:1.05em;background:var(--g);vertical-align:text-bottom;animation:bl 1.1s steps(1) infinite}
+@keyframes bl{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.cur{animation:none}}
+.side{border:1px solid var(--gdd);padding:12px;overflow-y:auto;min-height:0}
+.keys{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.keys button{height:56px;background:#000;border:1px solid var(--gd);color:var(--g);font:700 1.25rem inherit;font-family:inherit;cursor:pointer}
+.keys button:active{background:var(--g);color:#000}
+.keys .op{border-color:#ff4d4d;color:#ff4d4d;font-size:1.7rem;font-weight:700}
+.keys .eq{grid-column:span 4;background:var(--g);color:#000}
+label{display:block;margin-bottom:14px;color:var(--gd)}
+input{display:block;width:100%;margin-top:4px;background:#000;border:0;border-bottom:1px solid var(--g);color:var(--hi);font:700 1.2rem inherit;font-family:inherit;padding:8px 2px;border-radius:0}
+.hint{color:var(--gd);font-size:.85rem}
+@media (max-width:720px){.term{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto}.side{overflow:visible}.keys button{height:50px}}
+</style>
+</head>
+<body>
+<div class="app">
+ <div class="bar"><span class="t">nic@rechner:~$</span><span id="tabs" style="display:contents"></span></div>
+ <div class="term">
+  <div class="log" id="log" aria-live="polite"></div>
+  <div class="side" id="side"></div>
+ </div>
+</div>
+<script>
+var G=function(n,d){return isFinite(n)?n.toLocaleString('de-DE',{maximumFractionDigits:d==null?2:d,useGrouping:false}):'–'};
+var eur=function(n){return G(n,2)+' €'};
+var num=function(v){var x=parseFloat(String(v).replace(',','.'));return isNaN(x)?0:x};
+var log=document.getElementById('log'),side=document.getElementById('side'),tabs=document.getElementById('tabs');
+var mode='calc',hist=[],ex='';
+
+/* ---- Rechnen mit Schritten ---- */
+function run(src){
+ var p=0,s=src.replace(/\s/g,''),steps=[];
+ function expr(){var a=term();while(s[p]==='+'||s[p]==='−'){var o=s[p++],b=term(),r=o==='+'?a+b:a-b;steps.push(G(a,8)+' '+o+' '+G(b,8)+' = '+G(r,8));a=r}return a}
+ function term(){var a=un();while(s[p]==='×'||s[p]==='÷'){var o=s[p++],b=un();if(o==='÷'&&b===0)throw Error('Teilen durch 0 geht nicht');var r=o==='×'?a*b:a/b;steps.push(G(a,8)+' '+o+' '+G(b,8)+' = '+G(r,8));a=r}return a}
+ function un(){if(s[p]==='−'){p++;return -un()}return po()}
+ function po(){var v=pr();while(s[p]==='%'){p++;var r=v/100;steps.push(G(v,8)+' % = '+G(r,8));v=r}return v}
+ function pr(){if(s[p]==='('){p++;var v=expr();if(s[p]!==')')throw Error('Klammer ) fehlt');p++;return v}
+  var m=/^(\d+(,\d*)?|,\d+)/.exec(s.slice(p));if(!m)throw Error('Zahl fehlt');p+=m[0].length;return parseFloat(m[0].replace(',','.'))}
+ var v=expr();if(p<s.length)throw Error('Unerwartetes Zeichen: '+s[p]);return{v:v,steps:steps};
+}
+function clean(x){return x.replace(/[+−×÷,]+$/,'')}
+
+function draw(){
+ if(mode!=='calc')return;
+ var h='<div class="st">// Rechner bereit. Tippe oder nutze die Tasten rechts.</div>';
+ hist.forEach(function(b){
+  h+='<div class="cmd">&gt; '+b.e+'</div>';
+  if(b.err){h+='<div class="err">Fehler: '+b.err+'</div>';return}
+  b.steps.forEach(function(t,i){h+='<div class="st">  Schritt '+(i+1)+': '+t+'</div>'});
+  h+='<div class="res">= '+G(b.v,8)+'</div>';
+ });
+ var pv='';
+ if(ex){try{var r=run(clean(ex));pv=' <span class="st">  ≈ '+G(r.v,8)+'</span>'}catch(e){}}
+ h+='<div class="live">&gt; '+ex+'<span class="cur"></span>'+pv+'</div>';
+ log.innerHTML=h;log.scrollTop=log.scrollHeight;
+}
+function press(k){
+ if(k==='C'){ex=''}
+ else if(k==='⌫'){ex=ex.slice(0,-1)}
+ else if(k==='='){
+  if(!ex)return;
+  try{var r=run(clean(ex));hist.push({e:ex,steps:r.steps,v:r.v});ex=G(r.v,8).replace('-','−')}catch(e){hist.push({e:ex,err:e.message});}
+ }
+ else if('+−×÷'.indexOf(k)>-1){if(!ex&&k!=='−')return;if(/[+−×÷]$/.test(ex)&&k!=='−')ex=ex.slice(0,-1);ex+=k}
+ else ex+=k;
+ draw();
+}
+function calcView(){
+ var K=['C','⌫','(',')','7','8','9','÷','4','5','6','×','1','2','3','−','0',',','%','+','='];
+ side.innerHTML='<div class="keys" id="ks"></div><p class="hint">Tastatur geht auch: Zahlen, + − * / ( ) und Enter.</p>';
+ var ks=document.getElementById('ks');
+ K.forEach(function(k){var b=document.createElement('button');b.textContent=k;b.setAttribute('aria-label',k==='⌫'?'Löschen':k);
+  if('÷×−+()%'.indexOf(k)>-1||k==='C'||k==='⌫')b.className='op';if(k==='=')b.className='eq';
+  b.onclick=function(){press(k)};ks.appendChild(b)});
+ draw();
+}
+document.addEventListener('keydown',function(e){
+ if(mode!=='calc'||e.ctrlKey||e.metaKey||e.altKey)return;
+ var m={'*':'×','/':'÷','-':'−','.':',','Enter':'=','Backspace':'⌫','Escape':'C'},k=m[e.key]||e.key;
+ if(/^[0-9+−×÷(),%=⌫C]$/.test(k)){e.preventDefault();press(k)}
+});
+
+/* ---- Spezial-Rechner ---- */
+var TOOLS={
+ rabatt:{f:[['preis (€)','p'],['rabatt (%)','r']],
+  c:function(v){var s=v.p*v.r/100;return[['st','Rabatt: '+G(v.p)+' × '+G(v.r)+' ÷ 100 = '+eur(s)],['st','Neuer Preis: '+G(v.p)+' − '+G(s)+' = '+eur(v.p-s)],['res','Du sparst '+eur(s)+', zahlst '+eur(v.p-s)]]}},
+ lohn:{f:[['stundenlohn (€)','l'],['stunden pro woche','h']],hint:'Brutto, ohne Abzüge.',
+  c:function(v){var w=v.l*v.h,m=w*52/12,d=603-m;return[['st','Woche: '+G(v.l)+' × '+G(v.h)+' = '+eur(w)],['st','Monat: '+G(w)+' × 52 ÷ 12 = '+eur(m)],['res','Ca. '+eur(m)+' im Monat'],['st','Minijob-Grenze 2026: 603 €'],['st',d>=0?'Noch '+eur(d)+' bis zur Grenze':'Du liegst '+eur(-d)+' drüber']]}},
+ sparen:{f:[['sparziel (€)','z'],['schon gespart (€)','g'],['pro monat (€)','m']],
+  c:function(v){var r=Math.max(v.z-v.g,0);if(v.m<=0)return[['st','Gib ein, wie viel du pro Monat sparst.']];var n=Math.ceil(r/v.m);return[['st','Offen: '+G(v.z)+' − '+G(v.g)+' = '+eur(r)],['st','Dauer: '+G(r)+' ÷ '+G(v.m)+' = '+G(r/v.m)+' Monate, aufgerundet'],['res',n+' Monate bis zum Ziel']]}},
+ sprit:{f:[['strecke (km)','k'],['verbrauch (l/100 km)','v'],['preis pro liter (€)','p']],
+  c:function(v){var l=v.k*v.v/100;return[['st','Liter: '+G(v.k)+' × '+G(v.v)+' ÷ 100 = '+G(l)+' l'],['st','Kosten: '+G(l)+' × '+G(v.p)+' = '+eur(l*v.p)],['res',eur(l*v.p)+' für '+G(v.k)+' km']]}}
+};
+function toolView(id){
+ var t=TOOLS[id],h='';
+ t.f.forEach(function(f){h+='<label>'+f[0]+' &gt;<input inputmode="decimal" autocomplete="off" data-k="'+f[1]+'"></label>'});
+ side.innerHTML=h+(t.hint?'<p class="hint">'+t.hint+'</p>':'');
+ var upd=function(){var v={};side.querySelectorAll('input').forEach(function(i){v[i.dataset.k]=num(i.value)});
+  var o='<div class="cmd">$ '+id+' --rechne</div>';
+  t.c(v).forEach(function(r){o+='<div class="'+r[0]+'">  '+r[1]+'</div>'});log.innerHTML=o};
+ side.querySelectorAll('input').forEach(function(i){i.addEventListener('input',upd)});upd();
+}
+
+/* ---- Reiter ---- */
+['rechner','rabatt','lohn','sparen','sprit'].forEach(function(n){
+ var b=document.createElement('button');b.textContent='['+n+']';b.dataset.id=n;b.setAttribute('aria-selected',n==='rechner');
+ b.onclick=function(){mode=n==='rechner'?'calc':n;
+  [].forEach.call(tabs.children,function(x){x.setAttribute('aria-selected',x===b)});
+  n==='rechner'?calcView():toolView(n)};
+ tabs.appendChild(b)});
+calcView();
+</script>
+</body>
+</html>
